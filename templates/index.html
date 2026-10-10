@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YoriNetflix Web Checker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: 'Courier New', Courier, monospace; }
+        .console { background: #000; height: 300px; overflow-y: scroll; border: 1px solid #334155; }
+        .hit { color: #4ade80; }
+        .dead { color: #f87171; }
+        .warn { color: #fbbf24; }
+        .info { color: #38bdf8; }
+        .dropzone { border: 2px dashed #475569; transition: all 0.2s; }
+        .dropzone:hover { border-color: #38bdf8; background: #1e293b; }
+    </style>
+</head>
+<body class="p-8 max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold text-center mb-8 text-blue-400">YoriNetflix Web Checker</h1>
+    
+    <form id="uploadForm" class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <div>
+            <label class="block mb-2 text-sm font-bold text-slate-300">Combos / Cookies (.txt)</label>
+            <input type="file" name="combos" accept=".txt" required class="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-500 file:text-white hover:file:bg-blue-600"/>
+        </div>
+        <div>
+            <label class="block mb-2 text-sm font-bold text-slate-300">Proxies (.txt) - Optional</label>
+            <input type="file" name="proxies" accept=".txt" class="block w-full text-sm text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-slate-700 file:text-white hover:file:bg-slate-600"/>
+        </div>
+        <div>
+            <label class="block mb-2 text-sm font-bold text-slate-300">Threads</label>
+            <input type="number" name="threads" value="20" min="1" max="100" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+        </div>
+        <div>
+            <label class="block mb-2 text-sm font-bold text-slate-300">Timeout (s)</label>
+            <input type="number" name="timeout" value="20" min="5" max="60" class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white">
+        </div>
+    </form>
+
+    <button id="startBtn" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded mb-8 transition">
+        Start Checking
+    </button>
+
+    <div id="stats" class="hidden grid grid-cols-4 gap-4 mb-6 text-center">
+        <div class="bg-slate-800 p-4 rounded border border-slate-700"><div class="text-slate-400 text-xs">DONE</div><div id="stat-done" class="text-2xl font-bold text-blue-400">0</div></div>
+        <div class="bg-slate-800 p-4 rounded border border-slate-700"><div class="text-slate-400 text-xs">TOTAL</div><div id="stat-total" class="text-2xl font-bold text-white">0</div></div>
+        <div class="bg-slate-800 p-4 rounded border border-slate-700"><div class="text-slate-400 text-xs">HITS</div><div id="stat-hits" class="text-2xl font-bold text-green-400">0</div></div>
+        <div class="bg-slate-800 p-4 rounded border border-slate-700"><div class="text-slate-400 text-xs">DEAD</div><div id="stat-dead" class="text-2xl font-bold text-red-400">0</div></div>
+    </div>
+
+    <div class="w-full bg-slate-800 rounded-full h-2.5 mb-6">
+        <div id="progress" class="bg-blue-500 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+    </div>
+
+    <div id="console" class="console p-4 text-sm rounded mb-6"></div>
+
+    <a id="downloadBtn" href="#" class="hidden w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded text-center transition">
+        Download Results (.zip)
+    </a>
+
+    <script>
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            const form = document.getElementById('uploadForm');
+            const formData = new FormData(form);
+            const btn = document.getElementById('startBtn');
+            
+            btn.disabled = true;
+            btn.innerText = "Processing...";
+            document.getElementById('console').innerHTML = '';
+            
+            try {
+                const res = await fetch('/start', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (data.error) { alert(data.error); btn.disabled = false; btn.innerText = "Start Checking"; return; }
+                
+                const taskId = data.task_id;
+                document.getElementById('stats').classList.remove('hidden');
+                document.getElementById('stat-total').innerText = data.total;
+                
+                const evtSource = new EventSource(`/stream/${taskId}`);
+                evtSource.onmessage = (event) => {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'stats') {
+                        document.getElementById('stat-done').innerText = msg.done;
+                        document.getElementById('stat-hits').innerText = msg.hits;
+                        document.getElementById('stat-dead').innerText = msg.dead;
+                        document.getElementById('progress').style.width = `${(msg.done/msg.total)*100}%`;
+                    } else if (msg.type === 'hit') {
+                        log(`✅ HIT | ${msg.email} | ${msg.plan} | ${msg.country}`, 'hit');
+                    } else if (msg.type === 'dead') {
+                        log(`❌ DEAD | ${msg.msg}`, 'dead');
+                    } else if (msg.type === 'log') {
+                        log(msg.msg, msg.tag);
+                    } else if (msg.type === 'done') {
+                        evtSource.close();
+                        document.getElementById('downloadBtn').classList.remove('hidden');
+                        document.getElementById('downloadBtn').href = `/download/${taskId}`;
+                        btn.disabled = false;
+                        btn.innerText = "Start Checking";
+                    }
+                };
+            } catch (e) {
+                alert("Network error");
+                btn.disabled = false;
+                btn.innerText = "Start Checking";
+            }
+        });
+
+        function log(msg, cls) {
+            const c = document.getElementById('console');
+            const line = document.createElement('div');
+            line.className = cls;
+            line.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            c.appendChild(line);
+            c.scrollTop = c.scrollHeight;
+        }
+    </script>
+</body>
+</html>
